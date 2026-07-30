@@ -68,3 +68,14 @@ func TestHashFileDetectsContentMutation(t *testing.T) {
 		t.Fatal("content mutation retained artifact digest")
 	}
 }
+
+func TestAssetReleaseTargetsMaster(t *testing.T) {
+	args := assetReleaseArgs("v0.0.12", "/tmp/vendor.tar.xz", "0.0.12", strings.Repeat("a", 40), "digest")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--repo airencracken/arise-overlay-assets --target master") {
+		t.Fatalf("asset release arguments do not target master: %q", joined)
+	}
+	if strings.Contains(joined, "--target main") {
+		t.Fatalf("asset release arguments retain obsolete main branch: %q", joined)
+	}
+}

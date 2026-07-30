@@ -140,10 +140,7 @@ func publish(cfg config) error {
 		}
 	}
 	if !ledger.AssetPublished {
-		notes := fmt.Sprintf("Immutable offline vendor sources for Arise %s. Source commit: %s. SHA-256: %s.", cfg.version, ledger.SourceCommit, ledger.ArtifactSHA256)
-		if err := run(cfg.arise, nil, "gh", "release", "create", tag, ledger.Artifact,
-			"--repo", "airencracken/arise-overlay-assets", "--target", "main",
-			"--title", "Arise "+cfg.version+" vendor sources", "--notes", notes); err != nil {
+		if err := run(cfg.arise, nil, "gh", assetReleaseArgs(tag, ledger.Artifact, cfg.version, ledger.SourceCommit, ledger.ArtifactSHA256)...); err != nil {
 			return err
 		}
 		ledger.AssetPublished = true
@@ -179,6 +176,15 @@ func publish(cfg config) error {
 	}
 	fmt.Printf("Arise %s published; live-system installation remains manual.\n", cfg.version)
 	return nil
+}
+
+func assetReleaseArgs(tag, artifact, version, sourceCommit, digest string) []string {
+	notes := fmt.Sprintf("Immutable offline vendor sources for Arise %s. Source commit: %s. SHA-256: %s.", version, sourceCommit, digest)
+	return []string{
+		"release", "create", tag, artifact,
+		"--repo", "airencracken/arise-overlay-assets", "--target", "master",
+		"--title", "Arise " + version + " vendor sources", "--notes", notes,
+	}
 }
 
 func renderOverlay(cfg config, ledger rel.Ledger) error {
