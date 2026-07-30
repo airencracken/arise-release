@@ -257,7 +257,7 @@ func loadAndCheck(cfg config, withArtifact bool) (rel.Ledger, error) {
 }
 
 func requireClean(dir string) error {
-	status, err := output(dir, "git", "status", "--porcelain")
+	status, err := output(dir, "git", "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -36,6 +37,10 @@ func Load(path string) (Ledger, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ledger); err != nil {
 		return Ledger{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Ledger{}, errors.New("release ledger contains trailing data")
 	}
 	if ledger.Schema != Schema || ledger.Version == "" {
 		return Ledger{}, errors.New("unsupported or incomplete release ledger")

@@ -53,4 +53,10 @@ func TestLedgerRejectsMutationAndUnknownSchema(t *testing.T) {
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("invalid schema error = %v", err)
 	}
+	if err := os.WriteFile(path, []byte(`{"schema":1,"version":"1.2.3"} {}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("trailing data error = %v", err)
+	}
 }
