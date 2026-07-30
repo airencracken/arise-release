@@ -79,3 +79,9 @@ func TestAssetReleaseTargetsMaster(t *testing.T) {
 		t.Fatalf("asset release arguments retain obsolete main branch: %q", joined)
 	}
 }
+
+func TestOverlayPublicationPushesWorktreeHeadToMaster(t *testing.T) {
+	if got, want := strings.Join(overlayPushArgs(), " "), "push origin HEAD:master"; got != want {
+		t.Fatalf("overlay push arguments = %q, want %q", got, want)
+	}
+}

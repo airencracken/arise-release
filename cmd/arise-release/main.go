@@ -166,7 +166,7 @@ func publish(cfg config) error {
 		if err != nil {
 			return err
 		}
-		if err := run(cfg.overlay, nil, "git", "push", "origin", "master"); err != nil {
+		if err := run(cfg.overlay, nil, "git", overlayPushArgs()...); err != nil {
 			return err
 		}
 		ledger.OverlayCommit, ledger.OverlayPublished = commit, true
@@ -185,6 +185,10 @@ func assetReleaseArgs(tag, artifact, version, sourceCommit, digest string) []str
 		"--repo", "airencracken/arise-overlay-assets", "--target", "master",
 		"--title", "Arise " + version + " vendor sources", "--notes", notes,
 	}
+}
+
+func overlayPushArgs() []string {
+	return []string{"push", "origin", "HEAD:master"}
 }
 
 func renderOverlay(cfg config, ledger rel.Ledger) error {
