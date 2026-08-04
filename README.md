@@ -18,7 +18,7 @@ commits and the artifact digest still match.
 `prepare` requires a clean, committed source version bump and creates the
 vendor artifact. `verify` runs static, correctness, vet, race, benchmark, and
 reproducible offline gates. `publish` tags and publishes the source and asset,
-renders the overlay's maintained ebuild template, runs Portage validation, and
+renders this repository's embedded ebuild template, runs Portage validation, and
 commits and pushes the overlay. Completed publication steps are recorded so a
 retry resumes rather than replacing an immutable input.
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -17,6 +18,9 @@ import (
 )
 
 var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+//go:embed arise-vendor.ebuild.in
+var overlayEbuildTemplate string
 
 type config struct {
 	version, arise, overlay, state string
@@ -192,12 +196,7 @@ func overlayPushArgs() []string {
 }
 
 func renderOverlay(cfg config, ledger rel.Ledger) error {
-	templatePath := filepath.Join(cfg.overlay, "scripts", "templates", "arise-vendor.ebuild.in")
-	data, err := os.ReadFile(templatePath)
-	if err != nil {
-		return err
-	}
-	rendered := strings.ReplaceAll(string(data), "@ARISE_COMMIT@", ledger.SourceCommit)
+	rendered := strings.ReplaceAll(overlayEbuildTemplate, "@ARISE_COMMIT@", ledger.SourceCommit)
 	target := filepath.Join(cfg.overlay, "sys-apps", "arise", "arise-"+cfg.version+".ebuild")
 	if _, err := os.Stat(target); err == nil {
 		return errors.New("overlay target already exists")

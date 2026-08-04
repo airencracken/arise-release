@@ -11,15 +11,7 @@ import (
 
 func TestRenderOverlayIsAtomicAndPinned(t *testing.T) {
 	overlay := t.TempDir()
-	templateDir := filepath.Join(overlay, "scripts", "templates")
-	if err := os.MkdirAll(templateDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Join(overlay, "sys-apps", "arise"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(templateDir, "arise-vendor.ebuild.in"),
-		[]byte("ARISE_COMMIT=\"@ARISE_COMMIT@\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(overlay, "Makefile"), []byte("VERSION ?= 0.0.1\n"), 0o644); err != nil {
@@ -35,6 +27,9 @@ func TestRenderOverlayIsAtomicAndPinned(t *testing.T) {
 	}
 	if !strings.Contains(string(ebuild), strings.Repeat("a", 40)) {
 		t.Fatalf("ebuild = %q", ebuild)
+	}
+	if !strings.Contains(string(ebuild), "inherit shell-completion go-module") {
+		t.Fatalf("embedded release template was not rendered: %q", ebuild)
 	}
 	makefile, err := os.ReadFile(filepath.Join(overlay, "Makefile"))
 	if err != nil {
