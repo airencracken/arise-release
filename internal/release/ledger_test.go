@@ -9,7 +9,10 @@ import (
 
 func TestLedgerAtomicRoundTripAndIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "release.json")
-	want := Ledger{Version: "1.2.3", SourceCommit: "source", OverlayBase: "overlay", ArtifactSHA256: "digest", Prepared: true}
+	want := Ledger{
+		Version: "1.2.3", SourceCommit: "source", OverlayBase: "overlay",
+		Artifact: "vendor", ArtifactSHA256: "digest", BinaryArtifact: "binary", BinarySHA256: "binary-digest", Prepared: true,
+	}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -17,7 +20,7 @@ func TestLedgerAtomicRoundTripAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateIdentity(got, "1.2.3", "source", "overlay", "digest"); err != nil {
+	if err := ValidateIdentity(got, "1.2.3", "source", "overlay", "digest", "binary-digest"); err != nil {
 		t.Fatal(err)
 	}
 	if got.Schema != Schema || !got.Prepared {
@@ -33,15 +36,16 @@ func TestLedgerAtomicRoundTripAndIdentity(t *testing.T) {
 }
 
 func TestLedgerRejectsMutationAndUnknownSchema(t *testing.T) {
-	ledger := Ledger{Version: "1.2.3", SourceCommit: "a", OverlayBase: "b", ArtifactSHA256: "c"}
+	ledger := Ledger{Version: "1.2.3", SourceCommit: "a", OverlayBase: "b", ArtifactSHA256: "c", BinarySHA256: "d"}
 	for name, args := range map[string][]string{
-		"version":  {"1.2.4", "a", "b", "c"},
-		"source":   {"1.2.3", "x", "b", "c"},
-		"overlay":  {"1.2.3", "a", "x", "c"},
-		"artifact": {"1.2.3", "a", "b", "x"},
+		"version":         {"1.2.4", "a", "b", "c", "d"},
+		"source":          {"1.2.3", "x", "b", "c", "d"},
+		"overlay":         {"1.2.3", "a", "x", "c", "d"},
+		"artifact":        {"1.2.3", "a", "b", "x", "d"},
+		"binary artifact": {"1.2.3", "a", "b", "c", "x"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := ValidateIdentity(ledger, args[0], args[1], args[2], args[3]); err == nil {
+			if err := ValidateIdentity(ledger, args[0], args[1], args[2], args[3], args[4]); err == nil {
 				t.Fatal("mutation accepted")
 			}
 		})

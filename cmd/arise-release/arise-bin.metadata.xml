@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>airencracken@users.noreply.github.com</email>
+		<name>Airen Cracken</name>
+	</maintainer>
+	<longdescription lang="en">
+		Official prebuilt static Arise release binary for bootstrapping and
+		recovery-oriented installation without a local Go toolchain.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">airencracken/arise</remote-id>
+	</upstream>
+</pkgmetadata>

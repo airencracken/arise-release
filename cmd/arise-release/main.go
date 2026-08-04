@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	rel "github.com/airencracken/arise-release/internal/release"
@@ -22,8 +24,26 @@ var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 //go:embed arise-vendor.ebuild.in
 var overlayEbuildTemplate string
 
+//go:embed arise-bin.ebuild.in
+var overlayBinaryEbuildTemplate string
+
+//go:embed arise-bin.metadata.xml
+var overlayBinaryMetadata string
+
 type config struct {
 	version, arise, overlay, state string
+}
+
+type binaryArtifactManifest struct {
+	Schema          int    `json:"schema"`
+	Version         string `json:"version"`
+	SourceCommit    string `json:"source_commit"`
+	GOOS            string `json:"goos"`
+	GOARCH          string `json:"goarch"`
+	GoToolchain     string `json:"go_toolchain"`
+	BuildMode       string `json:"build_mode"`
+	BinarySHA256    string `json:"binary_sha256"`
+	SourceDateEpoch int64  `json:"source_date_epoch"`
 }
 
 func main() {
@@ -89,15 +109,110 @@ func prepare(cfg config) error {
 	if err := run(cfg.arise, nil, "make", "deps", "VERSION="+cfg.version); err != nil {
 		return err
 	}
+	if err := run(cfg.arise, nil, "make", "static"); err != nil {
+		return err
+	}
 	artifact := filepath.Join(cfg.arise, "dist", "arise-"+cfg.version+"-vendor.tar.xz")
 	digest, err := hashFile(artifact)
 	if err != nil {
 		return err
 	}
+	binaryArtifact, binaryDigest, err := prepareBinaryArtifact(cfg, source)
+	if err != nil {
+		return err
+	}
 	return rel.Save(cfg.state, rel.Ledger{
 		Version: cfg.version, SourceCommit: source, OverlayBase: overlay,
-		Artifact: artifact, ArtifactSHA256: digest, Prepared: true,
+		Artifact: artifact, ArtifactSHA256: digest,
+		BinaryArtifact: binaryArtifact, BinarySHA256: binaryDigest, Prepared: true,
 	})
+}
+
+func prepareBinaryArtifact(cfg config, sourceCommit string) (string, string, error) {
+	binary := filepath.Join(cfg.arise, "arise")
+	reported, err := output(cfg.arise, binary, "--version")
+	if err != nil {
+		return "", "", err
+	}
+	if reported != "arise "+cfg.version {
+		return "", "", fmt.Errorf("release binary reports %q, expected %q", reported, "arise "+cfg.version)
+	}
+	linkage, err := output(cfg.arise, "file", binary)
+	if err != nil {
+		return "", "", err
+	}
+	if !strings.Contains(linkage, "ELF 64-bit LSB executable") || !strings.Contains(linkage, "x86-64") || !strings.Contains(linkage, "statically linked") {
+		return "", "", fmt.Errorf("release binary is not a static linux-amd64 ELF: %s", linkage)
+	}
+	epochText, err := output(cfg.arise, "git", "show", "-s", "--format=%ct", sourceCommit)
+	if err != nil {
+		return "", "", err
+	}
+	epoch, err := strconv.ParseInt(epochText, 10, 64)
+	if err != nil || epoch <= 0 {
+		return "", "", fmt.Errorf("invalid source commit epoch %q", epochText)
+	}
+	toolchain, err := output(cfg.arise, "go", "version")
+	if err != nil {
+		return "", "", err
+	}
+	binaryDigest, err := hashFile(binary)
+	if err != nil {
+		return "", "", err
+	}
+	dist := filepath.Join(cfg.arise, "dist")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		return "", "", err
+	}
+	work, err := os.MkdirTemp(dist, ".arise-bin-*")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(work)
+	rootName := "arise-bin-" + cfg.version + "-linux-amd64"
+	root := filepath.Join(work, rootName)
+	if err := os.Mkdir(root, 0o755); err != nil {
+		return "", "", err
+	}
+	files := []struct {
+		source, target string
+		mode           os.FileMode
+	}{
+		{binary, "arise", 0o755},
+		{filepath.Join(cfg.arise, "arise.1"), "arise.1", 0o644},
+		{filepath.Join(cfg.arise, "misc", "arise-completion.bash"), "arise-completion.bash", 0o644},
+		{filepath.Join(cfg.arise, "README.md"), "README.md", 0o644},
+		{filepath.Join(cfg.arise, "LICENSE"), "LICENSE", 0o644},
+	}
+	for _, file := range files {
+		if err := copyFile(file.source, filepath.Join(root, file.target), file.mode); err != nil {
+			return "", "", err
+		}
+	}
+	manifest := binaryArtifactManifest{
+		Schema: 1, Version: cfg.version, SourceCommit: sourceCommit,
+		GOOS: "linux", GOARCH: "amd64", GoToolchain: toolchain,
+		BuildMode: "static-exe", BinarySHA256: binaryDigest, SourceDateEpoch: epoch,
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", "", err
+	}
+	manifestData = append(manifestData, '\n')
+	if err := atomicWrite(filepath.Join(root, "arise-artifact-manifest.json"), manifestData, 0o644); err != nil {
+		return "", "", err
+	}
+	artifact := filepath.Join(dist, rootName+".tar.xz")
+	if err := run(work, []string{"XZ_OPT=-9e"}, "tar",
+		"--sort=name", "--mtime=@"+epochText, "--owner=0", "--group=0", "--numeric-owner",
+		"-cJf", artifact, rootName); err != nil {
+		return "", "", err
+	}
+	artifactDigest, err := hashFile(artifact)
+	if err != nil {
+		return "", "", err
+	}
+	return artifact, artifactDigest, nil
 }
 
 func verify(cfg config) error {
@@ -143,6 +258,15 @@ func publish(cfg config) error {
 			return err
 		}
 	}
+	if !ledger.BinaryPublished {
+		if err := run(cfg.arise, nil, "gh", binaryReleaseUploadArgs(tag, ledger.BinaryArtifact)...); err != nil {
+			return err
+		}
+		ledger.BinaryPublished = true
+		if err := rel.Save(cfg.state, ledger); err != nil {
+			return err
+		}
+	}
 	if !ledger.AssetPublished {
 		if err := run(cfg.arise, nil, "gh", assetReleaseArgs(tag, ledger.Artifact, cfg.version, ledger.SourceCommit, ledger.ArtifactSHA256)...); err != nil {
 			return err
@@ -160,7 +284,9 @@ func publish(cfg config) error {
 			return err
 		}
 		if err := run(cfg.overlay, nil, "git", "add", "Makefile", "sys-apps/arise/Manifest",
-			"sys-apps/arise/arise-"+cfg.version+".ebuild", "metadata/md5-cache/sys-apps/arise-"+cfg.version); err != nil {
+			"sys-apps/arise/arise-"+cfg.version+".ebuild", "metadata/md5-cache/sys-apps/arise-"+cfg.version,
+			"sys-apps/arise-bin/Manifest", "sys-apps/arise-bin/metadata.xml",
+			"sys-apps/arise-bin/arise-bin-"+cfg.version+".ebuild", "metadata/md5-cache/sys-apps/arise-bin-"+cfg.version); err != nil {
 			return err
 		}
 		if err := run(cfg.overlay, nil, "git", "commit", "-m", "sys-apps/arise: release "+cfg.version); err != nil {
@@ -191,6 +317,10 @@ func assetReleaseArgs(tag, artifact, version, sourceCommit, digest string) []str
 	}
 }
 
+func binaryReleaseUploadArgs(tag, artifact string) []string {
+	return []string{"release", "upload", tag, artifact, "--repo", "airencracken/arise"}
+}
+
 func overlayPushArgs() []string {
 	return []string{"push", "origin", "HEAD:master"}
 }
@@ -198,11 +328,22 @@ func overlayPushArgs() []string {
 func renderOverlay(cfg config, ledger rel.Ledger) error {
 	rendered := strings.ReplaceAll(overlayEbuildTemplate, "@ARISE_COMMIT@", ledger.SourceCommit)
 	target := filepath.Join(cfg.overlay, "sys-apps", "arise", "arise-"+cfg.version+".ebuild")
+	binaryTarget := filepath.Join(cfg.overlay, "sys-apps", "arise-bin", "arise-bin-"+cfg.version+".ebuild")
+	binaryMetadata := filepath.Join(filepath.Dir(binaryTarget), "metadata.xml")
 	if _, err := os.Stat(target); err == nil {
 		return errors.New("overlay target already exists")
-	}
-	if err := atomicWrite(target, []byte(rendered), 0o644); err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	binaryCreated := false
+	if existing, err := os.ReadFile(binaryTarget); err == nil {
+		if string(existing) != overlayBinaryEbuildTemplate {
+			return errors.New("binary target already exists with non-canonical content")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else {
+		binaryCreated = true
 	}
 	makefilePath := filepath.Join(cfg.overlay, "Makefile")
 	makefile, err := os.ReadFile(makefilePath)
@@ -219,15 +360,64 @@ func renderOverlay(cfg config, ledger rel.Ledger) error {
 	if !found {
 		return errors.New("overlay Makefile has no VERSION default")
 	}
-	return atomicWrite(makefilePath, []byte(strings.Join(lines, "\n")), 0o644)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(binaryTarget), 0o755); err != nil {
+		return err
+	}
+	metadataCreated := false
+	if _, err := os.Stat(binaryMetadata); errors.Is(err, os.ErrNotExist) {
+		if err := atomicWrite(binaryMetadata, []byte(overlayBinaryMetadata), 0o644); err != nil {
+			return err
+		}
+		metadataCreated = true
+	} else if err != nil {
+		return err
+	}
+	rollback := func() {
+		_ = os.Remove(target)
+		if binaryCreated {
+			_ = os.Remove(binaryTarget)
+		}
+		if metadataCreated {
+			_ = os.Remove(binaryMetadata)
+		}
+	}
+	if err := atomicWrite(target, []byte(rendered), 0o644); err != nil {
+		rollback()
+		return err
+	}
+	if binaryCreated {
+		if err := atomicWrite(binaryTarget, []byte(overlayBinaryEbuildTemplate), 0o644); err != nil {
+			rollback()
+			return err
+		}
+	}
+	if err := atomicWrite(makefilePath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		rollback()
+		return err
+	}
+	return nil
 }
 
 func validateOverlay(cfg config) error {
 	target := filepath.Join(cfg.overlay, "sys-apps", "arise", "arise-"+cfg.version+".ebuild")
+	binaryTarget := filepath.Join(cfg.overlay, "sys-apps", "arise-bin", "arise-bin-"+cfg.version+".ebuild")
 	dist := "/tmp/arise-overlay-distfiles-" + cfg.version
 	portage := "/tmp/arise-overlay-portage-" + cfg.version
 	env := []string{"DISTDIR=" + dist}
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		return err
+	}
+	if err := copyFile(filepath.Join(cfg.arise, "dist", "arise-bin-"+cfg.version+"-linux-amd64.tar.xz"),
+		filepath.Join(dist, "arise-bin-"+cfg.version+"-linux-amd64.tar.xz"), 0o644); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
 	if err := run(cfg.overlay, env, "ebuild", "--force", target, "manifest"); err != nil {
+		return err
+	}
+	if err := run(cfg.overlay, env, "ebuild", "--force", binaryTarget, "manifest"); err != nil {
 		return err
 	}
 	repos := fmt.Sprintf("[gentoo]\nlocation = /var/db/repos/gentoo\nauto-sync = no\n\n[arise-overlay]\nlocation = %s\nmasters = gentoo\nauto-sync = no\n", cfg.overlay)
@@ -239,7 +429,10 @@ func validateOverlay(cfg config) error {
 		return err
 	}
 	env = []string{"DISTDIR=" + dist, "PORTAGE_TMPDIR=" + portage, "PORTAGE_USERNAME=" + currentUser(), "PORTAGE_GRPNAME=" + currentGroup()}
-	return run(cfg.overlay, env, "ebuild", target, "clean", "unpack", "compile", "test")
+	if err := run(cfg.overlay, env, "ebuild", target, "clean", "unpack", "compile", "test"); err != nil {
+		return err
+	}
+	return run(cfg.overlay, env, "ebuild", binaryTarget, "clean", "unpack", "prepare")
 }
 
 func loadAndCheck(cfg config, withArtifact bool) (rel.Ledger, error) {
@@ -256,13 +449,18 @@ func loadAndCheck(cfg config, withArtifact bool) (rel.Ledger, error) {
 		return ledger, err
 	}
 	digest := ""
+	binaryDigest := ""
 	if withArtifact {
 		digest, err = hashFile(ledger.Artifact)
 		if err != nil {
 			return ledger, err
 		}
+		binaryDigest, err = hashFile(ledger.BinaryArtifact)
+		if err != nil {
+			return ledger, err
+		}
 	}
-	return ledger, rel.ValidateIdentity(ledger, cfg.version, source, overlay, digest)
+	return ledger, rel.ValidateIdentity(ledger, cfg.version, source, overlay, digest, binaryDigest)
 }
 
 func requireClean(dir string) error {
@@ -307,6 +505,27 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func copyFile(source, target string, mode os.FileMode) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		_ = output.Close()
+		return err
+	}
+	return output.Close()
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
