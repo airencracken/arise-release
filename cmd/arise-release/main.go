@@ -246,7 +246,7 @@ func publish(cfg config) error {
 		if err := run(cfg.arise, nil, "git", "tag", "-a", tag, "-m", "arise "+tag); err != nil {
 			return err
 		}
-		if err := run(cfg.arise, nil, "git", "push", "origin", "master", tag); err != nil {
+		if err := run(cfg.arise, nil, "git", sourcePushArgs(tag)...); err != nil {
 			return err
 		}
 		notes := filepath.Join(cfg.arise, "docs", "releases", cfg.version+".md")
@@ -323,6 +323,10 @@ func binaryReleaseUploadArgs(tag, artifact string) []string {
 
 func overlayPushArgs() []string {
 	return []string{"push", "origin", "HEAD:master"}
+}
+
+func sourcePushArgs(tag string) []string {
+	return []string{"push", "origin", "HEAD:master", tag}
 }
 
 func renderOverlay(cfg config, ledger rel.Ledger) error {

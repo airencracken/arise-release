@@ -264,3 +264,9 @@ func TestOverlayPublicationPushesWorktreeHeadToMaster(t *testing.T) {
 		t.Fatalf("overlay push arguments = %q, want %q", got, want)
 	}
 }
+
+func TestSourcePublicationPushesWorktreeHeadToMaster(t *testing.T) {
+	if got, want := strings.Join(sourcePushArgs("v0.0.25"), " "), "push origin HEAD:master v0.0.25"; got != want {
+		t.Fatalf("source push arguments = %q, want %q", got, want)
+	}
+}
