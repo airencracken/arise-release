@@ -260,13 +260,13 @@ func main() { fmt.Println("arise 0.0.23") }
 }
 
 func TestOverlayPublicationPushesWorktreeHeadToMaster(t *testing.T) {
-	if got, want := strings.Join(overlayPushArgs(), " "), "push origin HEAD:master"; got != want {
+	if got, want := strings.Join(overlayPushArgs("prepared-overlay"), " "), "push origin prepared-overlay:refs/heads/master"; got != want {
 		t.Fatalf("overlay push arguments = %q, want %q", got, want)
 	}
 }
 
 func TestSourcePublicationPushesWorktreeHeadToMaster(t *testing.T) {
-	if got, want := strings.Join(sourcePushArgs("v0.0.25"), " "), "push origin HEAD:master v0.0.25"; got != want {
+	if got, want := strings.Join(sourcePushArgs("v0.0.25", "prepared-source"), " "), "push --atomic origin prepared-source:refs/heads/master v0.0.25"; got != want {
 		t.Fatalf("source push arguments = %q, want %q", got, want)
 	}
 }

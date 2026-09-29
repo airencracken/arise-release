@@ -27,6 +27,7 @@ type Ledger struct {
 	AssetPublished   bool   `json:"asset_published"`
 	BinaryPublished  bool   `json:"binary_published"`
 	OverlayCommit    string `json:"overlay_commit,omitempty"`
+	OverlayValidated bool   `json:"overlay_validated,omitempty"`
 	OverlayPublished bool   `json:"overlay_published"`
 }
 
@@ -95,7 +96,8 @@ func ValidateIdentity(ledger Ledger, version, sourceCommit, overlayBase, artifac
 	if ledger.Version != version {
 		return fmt.Errorf("ledger version %s does not match %s", ledger.Version, version)
 	}
-	if ledger.SourceCommit != sourceCommit || ledger.OverlayBase != overlayBase {
+	if ledger.SourceCommit != sourceCommit ||
+		(ledger.OverlayBase != overlayBase && (ledger.OverlayCommit == "" || ledger.OverlayCommit != overlayBase)) {
 		return errors.New("repository commits changed after release preparation")
 	}
 	if artifactSHA != "" && ledger.ArtifactSHA256 != artifactSHA {

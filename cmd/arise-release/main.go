@@ -229,6 +229,12 @@ func verify(cfg config) error {
 			return err
 		}
 	}
+	if _, err := loadAndCheck(cfg, true); err != nil {
+		return err
+	}
+	if err := prepareOverlay(cfg, &ledger); err != nil {
+		return err
+	}
 	ledger.Verified = true
 	return rel.Save(cfg.state, ledger)
 }
@@ -241,16 +247,27 @@ func publish(cfg config) error {
 	if !ledger.Verified {
 		return errors.New("release has not passed verify")
 	}
-	tag := "v" + cfg.version
-	if !ledger.SourcePublished {
-		if err := run(cfg.arise, nil, "git", "tag", "-a", tag, "-m", "arise "+tag); err != nil {
+	if !ledger.OverlayValidated {
+		if err := prepareOverlay(cfg, &ledger); err != nil {
 			return err
 		}
-		if err := run(cfg.arise, nil, "git", sourcePushArgs(tag)...); err != nil {
+	}
+	if err := checkPreparedOverlay(cfg, ledger); err != nil {
+		return err
+	}
+	if _, err := loadAndCheck(cfg, true); err != nil {
+		return err
+	}
+	tag := "v" + cfg.version
+	if !ledger.SourcePublished {
+		if err := ensureSourceTag(cfg, tag, ledger.SourceCommit); err != nil {
+			return err
+		}
+		if err := run(cfg.arise, nil, "git", sourcePushArgs(tag, ledger.SourceCommit)...); err != nil {
 			return err
 		}
 		notes := filepath.Join(cfg.arise, "docs", "releases", cfg.version+".md")
-		if err := run(cfg.arise, nil, "gh", "release", "create", tag, "--repo", "airencracken/arise", "--title", "Arise "+cfg.version, "--notes-file", notes); err != nil {
+		if err := ensureRelease(cfg.arise, "airencracken/arise", tag, []string{"release", "create", tag, "--repo", "airencracken/arise", "--title", "Arise " + cfg.version, "--notes-file", notes}); err != nil {
 			return err
 		}
 		ledger.SourcePublished = true
@@ -259,7 +276,7 @@ func publish(cfg config) error {
 		}
 	}
 	if !ledger.BinaryPublished {
-		if err := run(cfg.arise, nil, "gh", binaryReleaseUploadArgs(tag, ledger.BinaryArtifact)...); err != nil {
+		if err := ensureReleaseAsset(cfg.arise, "airencracken/arise", tag, ledger.BinaryArtifact, ledger.BinarySHA256); err != nil {
 			return err
 		}
 		ledger.BinaryPublished = true
@@ -268,7 +285,10 @@ func publish(cfg config) error {
 		}
 	}
 	if !ledger.AssetPublished {
-		if err := run(cfg.arise, nil, "gh", assetReleaseArgs(tag, ledger.Artifact, cfg.version, ledger.SourceCommit, ledger.ArtifactSHA256)...); err != nil {
+		if err := ensureRelease(cfg.arise, "airencracken/arise-overlay-assets", tag, assetReleaseArgs(tag, ledger.Artifact, cfg.version, ledger.SourceCommit, ledger.ArtifactSHA256)); err != nil {
+			return err
+		}
+		if err := ensureReleaseAsset(cfg.arise, "airencracken/arise-overlay-assets", tag, ledger.Artifact, ledger.ArtifactSHA256); err != nil {
 			return err
 		}
 		ledger.AssetPublished = true
@@ -277,29 +297,10 @@ func publish(cfg config) error {
 		}
 	}
 	if !ledger.OverlayPublished {
-		if err := renderOverlay(cfg, ledger); err != nil {
+		if err := run(cfg.overlay, nil, "git", overlayPushArgs(ledger.OverlayCommit)...); err != nil {
 			return err
 		}
-		if err := validateOverlay(cfg); err != nil {
-			return err
-		}
-		if err := run(cfg.overlay, nil, "git", "add", "Makefile", "sys-apps/arise/Manifest",
-			"sys-apps/arise/arise-"+cfg.version+".ebuild", "metadata/md5-cache/sys-apps/arise-"+cfg.version,
-			"sys-apps/arise-bin/Manifest", "sys-apps/arise-bin/metadata.xml",
-			"sys-apps/arise-bin/arise-bin-"+cfg.version+".ebuild", "metadata/md5-cache/sys-apps/arise-bin-"+cfg.version); err != nil {
-			return err
-		}
-		if err := run(cfg.overlay, nil, "git", "commit", "-m", "sys-apps/arise: release "+cfg.version); err != nil {
-			return err
-		}
-		commit, err := output(cfg.overlay, "git", "rev-parse", "HEAD")
-		if err != nil {
-			return err
-		}
-		if err := run(cfg.overlay, nil, "git", overlayPushArgs()...); err != nil {
-			return err
-		}
-		ledger.OverlayCommit, ledger.OverlayPublished = commit, true
+		ledger.OverlayPublished = true
 		if err := rel.Save(cfg.state, ledger); err != nil {
 			return err
 		}
@@ -321,12 +322,12 @@ func binaryReleaseUploadArgs(tag, artifact string) []string {
 	return []string{"release", "upload", tag, artifact, "--repo", "airencracken/arise"}
 }
 
-func overlayPushArgs() []string {
-	return []string{"push", "origin", "HEAD:master"}
+func overlayPushArgs(commit string) []string {
+	return []string{"push", "origin", commit + ":refs/heads/master"}
 }
 
-func sourcePushArgs(tag string) []string {
-	return []string{"push", "origin", "HEAD:master", tag}
+func sourcePushArgs(tag, commit string) []string {
+	return []string{"push", "--atomic", "origin", commit + ":refs/heads/master", tag}
 }
 
 func renderOverlay(cfg config, ledger rel.Ledger) error {
@@ -334,10 +335,15 @@ func renderOverlay(cfg config, ledger rel.Ledger) error {
 	target := filepath.Join(cfg.overlay, "sys-apps", "arise", "arise-"+cfg.version+".ebuild")
 	binaryTarget := filepath.Join(cfg.overlay, "sys-apps", "arise-bin", "arise-bin-"+cfg.version+".ebuild")
 	binaryMetadata := filepath.Join(filepath.Dir(binaryTarget), "metadata.xml")
-	if _, err := os.Stat(target); err == nil {
-		return errors.New("overlay target already exists")
+	sourceCreated := false
+	if existing, err := os.ReadFile(target); err == nil {
+		if string(existing) != rendered {
+			return errors.New("overlay target already exists with different pinned content")
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	} else {
+		sourceCreated = true
 	}
 	binaryCreated := false
 	if existing, err := os.ReadFile(binaryTarget); err == nil {
@@ -380,7 +386,9 @@ func renderOverlay(cfg config, ledger rel.Ledger) error {
 		return err
 	}
 	rollback := func() {
-		_ = os.Remove(target)
+		if sourceCreated {
+			_ = os.Remove(target)
+		}
 		if binaryCreated {
 			_ = os.Remove(binaryTarget)
 		}
@@ -388,9 +396,11 @@ func renderOverlay(cfg config, ledger rel.Ledger) error {
 			_ = os.Remove(binaryMetadata)
 		}
 	}
-	if err := atomicWrite(target, []byte(rendered), 0o644); err != nil {
-		rollback()
-		return err
+	if sourceCreated {
+		if err := atomicWrite(target, []byte(rendered), 0o644); err != nil {
+			rollback()
+			return err
+		}
 	}
 	if binaryCreated {
 		if err := atomicWrite(binaryTarget, []byte(overlayBinaryEbuildTemplate), 0o644); err != nil {
@@ -408,15 +418,22 @@ func renderOverlay(cfg config, ledger rel.Ledger) error {
 func validateOverlay(cfg config) error {
 	target := filepath.Join(cfg.overlay, "sys-apps", "arise", "arise-"+cfg.version+".ebuild")
 	binaryTarget := filepath.Join(cfg.overlay, "sys-apps", "arise-bin", "arise-bin-"+cfg.version+".ebuild")
-	dist := "/tmp/arise-overlay-distfiles-" + cfg.version
-	portage := "/tmp/arise-overlay-portage-" + cfg.version
-	env := []string{"DISTDIR=" + dist}
-	if err := os.MkdirAll(dist, 0o755); err != nil {
+	work, err := os.MkdirTemp("", "arise-overlay-validation-"+cfg.version+"-")
+	if err != nil {
 		return err
 	}
-	if err := copyFile(filepath.Join(cfg.arise, "dist", "arise-bin-"+cfg.version+"-linux-amd64.tar.xz"),
-		filepath.Join(dist, "arise-bin-"+cfg.version+"-linux-amd64.tar.xz"), 0o644); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
+	defer os.RemoveAll(work)
+	dist, portage := filepath.Join(work, "distfiles"), filepath.Join(work, "portage")
+	for _, path := range []string{dist, portage} {
+		if err := os.Mkdir(path, 0755); err != nil {
+			return err
+		}
+	}
+	env := []string{"DISTDIR=" + dist, "USE=test"}
+	for _, name := range []string{"arise-bin-" + cfg.version + "-linux-amd64.tar.xz", "arise-" + cfg.version + "-vendor.tar.xz"} {
+		if err := copyFile(filepath.Join(cfg.arise, "dist", name), filepath.Join(dist, name), 0o644); err != nil {
+			return err
+		}
 	}
 	if err := run(cfg.overlay, env, "ebuild", "--force", target, "manifest"); err != nil {
 		return err
@@ -432,7 +449,7 @@ func validateOverlay(cfg config) error {
 	if err := run(cfg.overlay, nil, "make", "check"); err != nil {
 		return err
 	}
-	env = []string{"DISTDIR=" + dist, "PORTAGE_TMPDIR=" + portage, "PORTAGE_USERNAME=" + currentUser(), "PORTAGE_GRPNAME=" + currentGroup()}
+	env = []string{"DISTDIR=" + dist, "PORTAGE_TMPDIR=" + portage, "PORTAGE_USERNAME=" + currentUser(), "PORTAGE_GRPNAME=" + currentGroup(), "USE=test"}
 	if err := run(cfg.overlay, env, "ebuild", target, "clean", "unpack", "compile", "test"); err != nil {
 		return err
 	}
@@ -443,6 +460,14 @@ func loadAndCheck(cfg config, withArtifact bool) (rel.Ledger, error) {
 	ledger, err := rel.Load(cfg.state)
 	if err != nil {
 		return ledger, err
+	}
+	if !ledger.Prepared {
+		return ledger, errors.New("release has not been prepared")
+	}
+	for _, path := range []string{cfg.arise, cfg.overlay} {
+		if err := requireClean(path); err != nil {
+			return ledger, err
+		}
 	}
 	source, err := output(cfg.arise, "git", "rev-parse", "HEAD")
 	if err != nil {
@@ -468,7 +493,7 @@ func loadAndCheck(cfg config, withArtifact bool) (rel.Ledger, error) {
 }
 
 func requireClean(dir string) error {
-	status, err := output(dir, "git", "status", "--porcelain", "--untracked-files=no")
+	status, err := output(dir, "git", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return err
 	}

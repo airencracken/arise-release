@@ -80,7 +80,7 @@ src_test() {
 	mkdir -p "${T}/test-home" || die "could not create isolated test home"
 	env -i GOCACHE="${GOCACHE}" GOMODCACHE="${GOMODCACHE}" GOPROXY=off \
 		HOME="${T}/test-home" PATH="${PATH}" TMPDIR="${T}" \
-		go test -mod=vendor ./... -timeout 120s
+		go test -mod=vendor ./... -timeout 120s || die "Go tests failed"
 }
 
 src_install() {
