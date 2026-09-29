@@ -64,7 +64,7 @@ func ensurePublicRelease(dir, repo, tag string) error {
 		return fmt.Errorf("release %s/%s is unavailable", repo, tag)
 	}
 	if info.IsDraft {
-		return run(dir, nil, "gh", "release", "edit", tag, "--repo", repo, "--draft", "false")
+		return run(dir, nil, "gh", "release", "edit", tag, "--repo", repo, "--draft=false")
 	}
 	return nil
 }

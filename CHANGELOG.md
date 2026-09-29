@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.2
+
+- Uses GitHub CLI's boolean-flag syntax for draft publication and checks that
+  command contract in the publication fixture.
+
 ## v0.1.1
 
 - Publishes prepared GitHub drafts only after their immutable assets match,

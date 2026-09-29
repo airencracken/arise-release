@@ -186,7 +186,11 @@ func TestReleaseCommandFixture(t *testing.T) {
 	}
 	switch op {
 	case "edit":
-		if option("--draft") != "false" {
+		validDraftFlag := false
+		for _, arg := range args {
+			validDraftFlag = validDraftFlag || arg == "--draft=false"
+		}
+		if !validDraftFlag {
 			os.Exit(2)
 		}
 		if err := os.Remove(filepath.Join(directory, ".draft")); err != nil {
