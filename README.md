@@ -30,6 +30,8 @@ pinned source/tag atomically, reconciles existing releases and immutable assets,
 and pushes the already validated overlay commit. Identical existing tags and
 assets are accepted on retry; conflicting identities stop publication. Network
 and authentication errors are reported rather than treated as missing releases.
+Existing drafts become public after both assets have been reconciled and before
+the overlay push.
 The ledger records the overlay commit before its push, so an interrupted push
 can resume. Calling publish again after completion is harmless.
 

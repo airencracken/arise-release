@@ -21,13 +21,14 @@ func ensureSourceTag(cfg config, tag, commit string) error {
 
 type releaseInfo struct {
 	TagName string `json:"tagName"`
+	IsDraft bool   `json:"isDraft"`
 	Assets  []struct {
 		Name string `json:"name"`
 	} `json:"assets"`
 }
 
 func readRelease(dir, repo, tag string) (releaseInfo, bool, error) {
-	cmd := exec.Command("gh", "release", "view", tag, "--repo", repo, "--json", "tagName,assets")
+	cmd := exec.Command("gh", "release", "view", tag, "--repo", repo, "--json", "tagName,assets,isDraft")
 	cmd.Dir = dir
 	data, err := cmd.CombinedOutput()
 	if err != nil {
@@ -52,6 +53,20 @@ func ensureRelease(dir, repo, tag string, create []string) error {
 		return err
 	}
 	return run(dir, nil, "gh", create...)
+}
+
+func ensurePublicRelease(dir, repo, tag string) error {
+	info, exists, err := readRelease(dir, repo, tag)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("release %s/%s is unavailable", repo, tag)
+	}
+	if info.IsDraft {
+		return run(dir, nil, "gh", "release", "edit", tag, "--repo", repo, "--draft", "false")
+	}
+	return nil
 }
 
 func ensureReleaseAsset(dir, repo, tag, artifact, digest string) error {

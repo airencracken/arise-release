@@ -64,7 +64,33 @@ func TestPublicationReconcilesCompletedRemoteSteps(t *testing.T) {
 	if err := publish(cfg); err != nil {
 		t.Fatalf("completed publication retry: %v", err)
 	}
+	for _, repo := range []string{"airencracken/arise", "airencracken/arise-overlay-assets"} {
+		draft := filepath.Join(fixture, strings.ReplaceAll(repo, "/", "_"), "v0.0.99", ".draft")
+		if err := os.WriteFile(draft, nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := rel.Save(cfg.state, ledger); err != nil {
+		t.Fatal(err)
+	}
+	draftBinary := filepath.Join(fixture, "airencracken_arise", "v0.0.99", filepath.Base(ledger.BinaryArtifact))
+	if err := os.WriteFile(draftBinary, []byte("conflicting draft payload"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := publish(cfg); err == nil || !strings.Contains(err.Error(), "different content") {
+		t.Fatalf("conflicting draft asset accepted: %v", err)
+	}
+	for _, repo := range []string{"airencracken/arise", "airencracken/arise-overlay-assets"} {
+		draft := filepath.Join(fixture, strings.ReplaceAll(repo, "/", "_"), "v0.0.99", ".draft")
+		if _, err := os.Stat(draft); err != nil {
+			t.Fatalf("conflicting assets caused draft publication: %s: %v", repo, err)
+		}
+	}
+	localBinary, err := os.ReadFile(ledger.BinaryArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(draftBinary, localBinary, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := publish(cfg); err != nil {
@@ -76,6 +102,12 @@ func TestPublicationReconcilesCompletedRemoteSteps(t *testing.T) {
 	}
 	if strings.Count(string(events), "create airencracken/arise\n") != 1 || strings.Count(string(events), "upload airencracken/arise\n") != 1 {
 		t.Fatalf("retry duplicated immutable publication: %s", events)
+	}
+	for _, repo := range []string{"airencracken/arise", "airencracken/arise-overlay-assets"} {
+		draft := filepath.Join(fixture, strings.ReplaceAll(repo, "/", "_"), "v0.0.99", ".draft")
+		if _, err := os.Stat(draft); !os.IsNotExist(err) {
+			t.Fatalf("prepared draft remains unpublished: %s: %v", repo, err)
+		}
 	}
 	// Existing assets must be checked, rather than blindly accepting a name.
 	published := filepath.Join(fixture, "airencracken_arise", "v0.0.99", filepath.Base(ledger.BinaryArtifact))
@@ -126,6 +158,10 @@ func TestReleaseCommandFixture(t *testing.T) {
 		}
 		info := releaseInfo{TagName: tag}
 		for _, entry := range entries {
+			if entry.Name() == ".draft" {
+				info.IsDraft = true
+				continue
+			}
 			info.Assets = append(info.Assets, struct {
 				Name string `json:"name"`
 			}{entry.Name()})
@@ -149,6 +185,13 @@ func TestReleaseCommandFixture(t *testing.T) {
 		}
 	}
 	switch op {
+	case "edit":
+		if option("--draft") != "false" {
+			os.Exit(2)
+		}
+		if err := os.Remove(filepath.Join(directory, ".draft")); err != nil {
+			os.Exit(2)
+		}
 	case "create":
 		if err := os.MkdirAll(directory, 0755); err != nil {
 			os.Exit(2)

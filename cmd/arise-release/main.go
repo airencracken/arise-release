@@ -297,6 +297,13 @@ func publish(cfg config) error {
 		}
 	}
 	if !ledger.OverlayPublished {
+		// Prepared drafts become public only after both immutable assets have
+		// been reconciled, and before the overlay can reference their URLs.
+		for _, repo := range []string{"airencracken/arise", "airencracken/arise-overlay-assets"} {
+			if err := ensurePublicRelease(cfg.arise, repo, tag); err != nil {
+				return err
+			}
+		}
 		if err := run(cfg.overlay, nil, "git", overlayPushArgs(ledger.OverlayCommit)...); err != nil {
 			return err
 		}

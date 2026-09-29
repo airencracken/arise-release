@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.1
+
+- Publishes prepared GitHub drafts only after their immutable assets match,
+  before pushing overlay entries that reference their download URLs.
+
 ## v0.1.0
 
 - Validates the overlay before publication and retains its committed identity.
